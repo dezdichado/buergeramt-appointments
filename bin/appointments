@@ -52,6 +52,11 @@ if __name__ == '__main__':
         help="Expose a websockets server on that port. Allows other software to listen for new appointments.",
         default=os.environ.get('BOOKING_TOOL_PORT', 80)
     )
+    parser.add_argument(
+        '--proxyfile', type=str,
+        help="Path to a file containing proxies to use for requests.",
+        default=os.environ.get('BOOKING_TOOL_PROXYFILE', "")
+    )
     args = parser.parse_args()
 
     service_page_url = args.url or ask_question(
@@ -59,9 +64,6 @@ if __name__ == '__main__':
         "This is service.berlin.de page for the service you want an appointment for. For example, \"https://service.berlin.de/dienstleistung/120686/\""
     )
 
-    email = args.email or ask_question(
-        "What is your email address?",
-        "It will be included in the requests this script makes. It's required by the Berlin.de appointments team."
-    )
+    email = None
 
-    asyncio.run(watch_for_appointments(service_page_url, email, args.id, args.port, args.quiet))
+    asyncio.run(watch_for_appointments(service_page_url, email, args.id, args.port, args.quiet, args.proxyfile))

@@ -1,3 +1,5 @@
+from time import monotonic
+
 from bs4 import BeautifulSoup, SoupStrainer
 from datetime import datetime
 import aiohttp
@@ -7,6 +9,8 @@ import json
 import logging
 import pytz
 import websockets
+
+from appointments.proxies import IdentityPool
 
 
 logger = logging.getLogger()
@@ -35,14 +39,22 @@ timezone = pytz.timezone('Europe/Berlin')
 
 
 def get_headers(email: str, script_id: str) -> dict[str, str]:
-    return {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Upgrade-Insecure-Requests': '1',
-        'User-Agent': f"Mozilla/5.0 AppointmentBookingTool/1.1 (https://github.com/nicbou/burgeramt-appointments-websockets; {email}; {script_id})",
-        'Accept-Language': 'en-gb',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "DNT": "1",
+        "Sec-GPC": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Priority": "u=0, i"
     }
+    return headers
 
 
 def get_appointments_url(service_page_url: str) -> str:
@@ -50,7 +62,7 @@ def get_appointments_url(service_page_url: str) -> str:
     return f"https://service.berlin.de/terminvereinbarung/termin/all/{service_id}/"
 
 
-async def get_appointments(appointments_url: str, email: str, script_id: str) -> list:
+async def get_appointments(appointments_url: str, email: str, script_id: str, proxy: str) -> list:
     """
     Fetch the appointments calendar on Berlin.de, parse it, and return appointment dates.
     """
@@ -58,7 +70,7 @@ async def get_appointments(appointments_url: str, email: str, script_id: str) ->
     next_month = timezone.localize(datetime(today.year, today.month % 12 + 1, 1))
     next_month_timestamp = int(next_month.timestamp())
 
-    async with aiohttp.ClientSession(raise_for_status=True) as session:
+    async with aiohttp.ClientSession(raise_for_status=True, proxy=proxy) as session:
         # Load the first two calendar pages
         async with session.get(appointments_url, headers=get_headers(email, script_id), timeout=20) as response_page1:
             page1_dates = parse_appointment_dates(await response_page1.text())
@@ -84,15 +96,16 @@ def parse_appointment_dates(page_content: str) -> list[datetime]:
     return appointment_dates
 
 
-async def look_for_appointments(appointments_url: str, email: str, script_id: str, quiet: bool) -> dict:
+async def look_for_appointments(appointments_url: str, email: str, script_id: str, quiet: bool, proxy: str) -> dict:
     """
     Look for appointments, return a response dict
     """
     try:
-        appointments = await get_appointments(appointments_url, email, script_id)
+        appointments = await get_appointments(appointments_url, email, script_id, proxy)
         logger.info(f"Found {len(appointments)} appointments: {[datetime_to_json(d) for d in appointments]}")
         if len(appointments) and not quiet:
             chime.info()
+            logger.info(appointments_url)
         return {
             'time': datetime_to_json(datetime.now()),
             'status': 200,
@@ -154,19 +167,24 @@ async def on_connect(client) -> None:
         connected_clients.remove(client)
 
 
-async def watch_for_appointments(service_page_url: str, email: str, script_id: str, server_port: int, quiet: bool):
+async def watch_for_appointments(service_page_url: str, email: str, script_id: str, server_port: int, quiet: bool, proxyfile: str):
     """
     Constantly look for new appointments on Berlin.de until stopped.
     """
     global last_message
+    global refresh_delay
+    identity_pool = IdentityPool(cooldown=180, proxies_file=proxyfile)
+    refresh_delay = 180 / identity_pool.total_identities
     logger.info(f"Getting appointment URL for {service_page_url}")
     appointments_url = get_appointments_url(service_page_url)
     logger.info(f"URL found: {appointments_url}")
     async with websockets.serve(on_connect, port=server_port):
         logger.info(f"Server is running on port {server_port}. Looking for appointments every {refresh_delay} seconds.")
         while True:
+            begin_time = monotonic()
             last_appts_found_on = last_message['lastAppointmentsFoundOn']
-            last_message = await look_for_appointments(appointments_url, email, script_id, quiet)
+            async with identity_pool.get_identity() as identity:
+                last_message = await look_for_appointments(appointments_url, identity.email, identity.script_id, quiet, identity.proxy)
             if last_message['appointmentDates']:
                 last_message['lastAppointmentsFoundOn'] = datetime_to_json(datetime.now())
             else:
@@ -174,4 +192,4 @@ async def watch_for_appointments(service_page_url: str, email: str, script_id: s
 
             websockets.broadcast(connected_clients, json.dumps(last_message))
 
-            await asyncio.sleep(refresh_delay)
+            await asyncio.sleep(refresh_delay - (monotonic() - begin_time))
