@@ -28,6 +28,11 @@ class IdentityPool:
                     available_proxies.append(elems)
         except FileNotFoundError:
             logger.error("File with proxies not found. Will use direct connection")
+        if not available_proxies:
+            logger.warning("No proxies found, will use direct connection")
+            available_proxies.append([None, None, None])
+        else:
+            logger.info(f"Using {len(available_proxies)} proxies")
         self._total_identities = len(available_proxies)
         self._identities = asyncio.Queue()
         for triplet in available_proxies:
