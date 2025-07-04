@@ -39,7 +39,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '-u', '--url',
-        help="URL to the service page on Berlin.de. For example, \"https://service.berlin.de/dienstleistung/120686/\"",
+        help="URL to the service page on Berlin.de. For example, \"https://service.berlin.de/dienstleistung/351180/\"",
         default=os.environ.get('BOOKING_TOOL_URL', None)
     )
     parser.add_argument(
@@ -61,7 +61,7 @@ if __name__ == '__main__':
 
     service_page_url = args.url or ask_question(
         "What is URL of the service you want to watch?",
-        "This is service.berlin.de page for the service you want an appointment for. For example, \"https://service.berlin.de/dienstleistung/120686/\""
+        "This is service.berlin.de page for the service you want an appointment for. For example, \"https://service.berlin.de/dienstleistung/351180/\""
     )
 
     email = None
